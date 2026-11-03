@@ -1,8 +1,8 @@
 # 🐟 AstrbotFishEyes
 
 [](https://github.com/Soulter/AstrBot)
-[]()
-[License](https://www.google.com/search?q=LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 
 **AstrbotFishEyes** 是专为 [AstrBot](https://github.com/Soulter/AstrBot) 打造的电脑屏幕查看与远程自动化控制（Computer Use）插件。支持本地与远程双模式、正/反向 SSH 隧道内网穿透、像素坐标网格视觉定位、二级 WebUI 实时交互控制台以及独立的单文件被控端桌面程序。
 
