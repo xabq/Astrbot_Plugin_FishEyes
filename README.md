@@ -1,6 +1,6 @@
-# 🐟 AstrbotFishEyes
+# 🐟鱼人之眼(AstrbotFishEyes)
 
-[](https://github.com/Soulter/AstrBot)
+[![AstrBot Version](https://img.shields.io/badge/AstrBot-%3E%3D3.5.0-blue.svg)](https://github.com/Soulter/AstrBot)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 
