@@ -100,3 +100,7 @@ AstrbotFishEyes/
   - `remote_token`: 被控端 Token
 
 保存后，点击 WebUI 上的 **【连接】** 或在聊天中发送 `/screen 连接`，即可完成！
+
+---
+
+# 本插件完全使用Gemini开发，有问题的话自己交给agent修改即可
