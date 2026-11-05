@@ -21,7 +21,7 @@ from android_controller import AndroidADBController
 from screen_controller import UnifiedController
 
 PLUGIN_NAME = "AstrbotFishEyes"
-PLUGIN_VERSION = "1.1.11"
+PLUGIN_VERSION = "1.1.12"
 
 TARGET_PC = "pc"
 TARGET_ANDROID = "android"
