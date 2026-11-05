@@ -1,36 +1,59 @@
 name: AstrbotFishEyes
-display_name: AstrbotFishEyes (电脑屏幕与远程控制)
-short_desc: 查看与操控本地或远程电脑屏幕，支持实时画面、点击输入、二级WebUI控制台与LLM自动化工具
+display_name: AstrbotFishEyes (电脑与安卓屏幕控制)
+short_desc: 查看与操控本地/远程电脑屏幕，并通过 ADB 控制 Android 手机（配对、连接、截图、触控、应用、Shell），含二级 WebUI 与 LLM 工具集
 desc: |
-  # AstrbotFishEyes - 电脑屏幕与远程控制 (Screen Control & Computer Use)
+  # AstrbotFishEyes - 电脑 + Android 屏幕与远程控制 (Screen Control & Computer Use)
 
-  让 AstrBot 可以查看和操控**本地电脑**或**远程电脑**屏幕！
-  本插件提供全套屏幕自动化能力，包含：
+  让 AstrBot 既能查看和操控**电脑屏幕**，也能通过 **ADB** 直接操作 **Android 手机 / 平板**！
 
   ## 🌟 核心特性
-  - 🖥️ **本地/远程双模式**：
-    - **本地模式 (Local)**：AstrBot 运行在桌面系统时，免配置直接控制本机屏幕与键鼠；
-    - **远程模式 (Remote)**：AstrBot 运行在云服务器/Docker 时，通过轻量级被控端 Agent 或正/反向 SSH 隧道安全连接目标电脑。
-  - 🌐 **二级 WebUI 可视化控制台 (Plugin View)**：
-    - 集成在 AstrBot 管理面板内部，免开端口，自动鉴权；
-    - **交互式画布**：实时查看桌面画面，**在画面上直接点击/双击/右键，即可精准控制电脑鼠标**！
-    - **虚拟控制面板**：文本快速输入（支持中文）、常用按键与组合键（Win+D、Alt+Tab、Ctrl+C/V、TaskMgr等）、鼠标滚轮滚动；
-    - **设备与状态监控**：查看分辨率、平台类型、连接延迟，一键切换模式与重连。
-  - 🤖 **LLM Agent 工具集 (Computer Use)**：
-    - 内置 11 个针对大模型的标准工具函数（截图并发送图片、点击、输入、按键、组合键、滚动、拖拽等）；
-    - 支持大模型自主决策观察屏幕并完成自动化任务。
-  - 💬 **聊天指令支持**：
-    - 支持 `/screen`、`/cu`、`/屏幕` 等指令直接在聊天中执行截图与操作。
-  - 🔒 **严格安全控制**：
-    - 管理员默认放行，支持配置用户白名单与权限提示；
-    - WebUI 控制面板支持紧急锁定开关，防止误操作。
+
+  ### 🎯 双控制目标（WebUI 左上角一键切换）
+  - 🖥️ **PC 目标**：本地模式（pyautogui 直控本机）或远程模式（被控端 Agent / 正反向 SSH 隧道）；
+  - 🤖 **Android 目标**：通过 `adb` 控制手机，支持无线调试配对、`adb connect`、SSH 反向隧道（SshAdbTunnel）穿透内网；
+  - 切换目标会自动断开旧会话，聊天指令、LLM 工具与 WebUI 控制台全部跟随当前目标。
+
+  ### 🔗 Android 配对与连接（WebUI 右侧【连接配置】）
+  - **配对**：填手机「使用配对码配对设备」弹窗中的端口 + 6 位配对码，一键 `adb pair`；
+  - **连接**：填连接端口（或 `127.0.0.1:5555` 反向隧道地址），一键 `adb connect` 并立即建立插件会话；
+  - **设备列表**：实时显示序列号、状态（device / unauthorized / offline）与型号；
+  - **ADB 自动探测**：PATH / ANDROID_HOME / 常见 platform-tools 目录 / 插件目录自带 platform-tools，也可手填路径。
+
+  ### 📱 Android 操作能力
+  - 画面：`screencap` 抓屏 → JPEG 压缩（可设最大宽度）→ 点击坐标自动换算回设备真实分辨率；
+  - 触控：点按、双击、长按（右键模式映射长按）、四向滑动、按方向翻页；
+  - 按键：back / home / recents / enter / 音量 / 电源 / 方向键 / `KEYCODE_XXX`；
+  - 文本：ASCII 走 `input text`，中文优先 **ADBKeyboard** 广播，其次剪贴板粘贴；
+  - 应用：启动（monkey / am start 兜底）、强制停止、列出第三方应用包名；
+  - 任意命令：`adb shell` 直通（Bot 工具、聊天指令、WebUI 快捷执行面板）。
+
+  ### 🌐 二级 WebUI 可视化控制台 (Plugin View)
+  - 集成在 AstrBot 管理面板内部，免开端口、自动鉴权；
+  - 左上角 **PC / Android 切换**，右侧【连接配置】含 **配对与连接** 面板；
+  - 交互式画布：直接点击画面下发操作；虚拟键盘、快捷键、手势、应用启动、ADB Shell 面板；
+  - 设备与状态监控：分辨率、延迟、在线状态、无操作倒计时、一键紧急锁定。
+
+  ### 🤖 LLM Agent 工具集 (Computer Use)
+  - PC：`screen_screenshot`、`screen_click`、`screen_type`、`screen_hotkey` 等 11 个工具；
+  - Android：`android_screenshot`、`android_click_element`、`android_tap`、`android_long_press`、
+    `android_swipe`、`android_type`、`android_key`、`android_open_app`、`android_stop_app`、
+    `android_shell`、`android_pair`、`android_connect`、`android_status`。
+
+  ### 💬 聊天指令
+  - PC：`/screen 截图`、`/screen 点击 x y`、`/screen 输入 文本`、`/screen 切换 pc` ...
+  - Android：`/adb 配对 <端口> <配对码>`、`/adb 连接 [host:port]`、`/adb 截图`、`/adb 点击 x y`、
+    `/adb 滑动 up`、`/adb 输入 文本`、`/adb 按键 back`、`/adb 应用 <包名>`、`/adb 命令 <shell>` ...
+
+  ### 📦 内置上一个项目源码
+  - `android/SshAdbTunnel/`：SSH 反向隧道 App 源码（含 APK、构建脚本、审查报告），
+    手机端挂隧道后，服务器侧即可用 `127.0.0.1:5555` 完成配对与连接（详见 `android/README.md`）。
 
   ## 快速使用
-  - 在 AstrBot WebUI 插件详情中打开 **屏幕控制台 (View)**
-  - 聊天中使用 `/screen 截图`、`/screen 点击 x y`、`/screen 帮助`
-  - 对话中直接让 AI 观察并操作电脑屏幕
+  1. WebUI 插件详情 → 打开 **屏幕控制台 (View)** → 左上角选择 **PC** 或 **Android**；
+  2. Android：右侧【连接配置 → 配对与连接】配对并连接设备；
+  3. 聊天：`/screen 帮助`、`/adb 帮助`。
 
-version: 1.0.0
+version: 1.1.11
 author: AstrBot Developer
 repo: https://github.com/your-repo/AstrbotFishEyes
 astrbot_version: ">=3.5.0"
@@ -38,6 +61,8 @@ tags:
   - screen
   - remote-desktop
   - computer-use
+  - android
+  - adb
   - automation
   - webui
   - agent

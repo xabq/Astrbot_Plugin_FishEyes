@@ -1,7 +1,8 @@
 """
-AstrbotFishEyes - AstrBot 电脑屏幕与远程控制插件
+AstrbotFishEyes - AstrBot 电脑屏幕与远程控制插件 (PC + Android ADB)
 ============================================================
-集成本地/远程电脑屏幕查看、操控、视觉坐标网格识别、图片转述模型接入与 AstrBot 二级 WebUI 控制台。
+集成本地/远程电脑屏幕查看、操控、视觉坐标网格识别、图片转述模型接入与 AstrBot 二级 WebUI 控制台，
+并新增 **Android 手机/平板 (ADB)** 目标：无线调试配对、连接、截图、触控、文本输入、应用启动与任意 adb shell。
 
 作者: AstrBot Developer
 版本: 1.1.0
@@ -38,32 +39,106 @@ except ImportError:  # pragma: no cover
 
     global_web_request = None
 
-from screen_controller import UnifiedController
+from device_controller import (
+    PLUGIN_VERSION,
+    TARGET_ANDROID,
+    TARGET_PC,
+    DeviceController,
+    normalize_target,
+)
 
 PLUGIN_NAME = "AstrbotFishEyes"
 LEGACY_PLUGIN_NAME = "astrbot_plugin_screen_control"
 
-HELP_TEXT = """🖥️ AstrbotFishEyes 电脑屏幕与远程控制
+# adb 来源的中文说明（用于 /adb 状态 与 LLM 工具输出）
+ADB_SOURCE_LABELS = {
+    "bundled": "插件内置 platform-tools",
+    "config": "插件设置 adb_path",
+    "env": "环境变量 ADB_PATH",
+    "path": "系统 PATH",
+    "sdk": "Android SDK 目录",
+}
 
-📌 聊天命令:
-  /screen 连接                  连接被控端电脑
+
+def _jpeg_line(info: dict) -> str:
+    """设备端 JPEG 压缩状态（参考 PC 端 Agent：被控侧先压缩再传）"""
+    jpeg = (info or {}).get("jpeg") or {}
+    if str(jpeg.get("mode") or "").lower() == "off":
+        return "已关闭（adb_jpeg_mode=off）"
+    if jpeg.get("dex_ready"):
+        return f"已就绪（q{jpeg.get('quality', 70)}，手机侧压缩后传输）"
+    reason = str(jpeg.get("reason") or "").strip()
+    return "待首次截图时自动启用" + (f"（{reason[:60]}）" if reason else "")
+
+
+def _stream_line(info: dict) -> str:
+    """把 Android 画面模式描述成一行文字（视频流 / 截图模式）"""
+    stream = (info or {}).get("stream") or {}
+    if stream.get("running"):
+        size = stream.get("size") or ""
+        bitrate = int((stream.get("bitrate") or 0) / 1000)
+        return f"视频流 {size} @{bitrate}kbps · {stream.get('frames', 0)} 帧"
+    reason = str(stream.get("reason") or "").strip()
+    return "截图模式" + (f"（{reason[:80]}）" if reason else "")
+
+HELP_TEXT = """🖥️ AstrbotFishEyes 电脑 + Android 屏幕与远程控制
+
+🎯 控制目标:
+  /screen 切换 pc|android       在【电脑】与【Android 手机】之间切换被控目标
+  /screen 模式 [local/remote]   查看或切换电脑侧控制模式
+
+📌 聊天命令 (作用于当前目标):
+  /screen 连接                  连接被控端（PC 或 Android）
   /screen 断开                  断开连接并释放内存
-  /screen 状态                  查看当前屏幕分辨率、连接状态与无操作倒计时
-  /screen 截图 [观察目标]       截取电脑屏幕（带了观察目标时自动调用视觉模型分析坐标）
+  /screen 状态                  查看目标、分辨率、连接状态与无操作倒计时
+  /screen 截图 [观察目标]       截取屏幕（带了观察目标时自动调用视觉模型分析坐标）
   /screen 识别点击 <目标描述>   视觉识别屏幕上指定元素并自动点击（如：/screen 识别点击 搜索按钮）
-  /screen 点击 x y              左键点击指定屏幕像素坐标
+  /screen 点击 x y              点击指定屏幕像素坐标
   /screen 双击 x y              双击指定坐标
-  /screen 右键 x y              右键点击指定坐标
+  /screen 右键 x y              右键点击（Android 映射为长按）
   /screen 输入 <文本>           输入文字(支持中文)
   /screen 按键 <key>            敲击单键(enter/esc/tab/space/win等)
   /screen 组合键 <k1> <k2>      按组合键(如 ctrl c, alt tab, win d)
-  /screen 滚动 <up/down>        滚轮滚动屏幕(up/down [数量])
-  /screen 模式 [local/remote]   查看或切换控制模式
+  /screen 滚动 <up/down>        滚动屏幕(up/down [数量])
   /screen 帮助                  显示本帮助说明
+
+📱 Android (ADB) 专用命令:
+  /adb 帮助                     查看 Android 指令与配对连接流程
+  /adb 配对 <端口> <配对码>     无线调试配对（手机「使用配对码配对设备」）
+  /adb 连接 [host:port]         连接设备（默认 127.0.0.1:5555，配合 SshAdbTunnel 反向隧道）
+  /adb 设备                     列出 adb 设备
+  /adb 截图 / 点击 / 滑动 / 输入 / 按键 / 应用 / 命令 ...
 
 🌐 二级 WebUI 控制台:
   请在 AstrBot 后台管理面板 →【插件】→ 进入 AstrbotFishEyes 插件详情，
-  点击进入【屏幕控制台 (View)】，支持实时画面直观查看与点击操作！"""
+  点击进入【屏幕控制台 (View)】，左上角可切换 PC / Android，右侧【连接配置】页含配对与连接。"""
+
+ADB_HELP_TEXT = """📱 AstrbotFishEyes · Android (ADB) 指令
+
+🔗 配对与连接:
+  /adb 设备                        列出当前 adb 设备（含状态、型号）
+  /adb 配对 <端口> <配对码>        配对（host 取设置项 adb_pair_host，默认 127.0.0.1）
+  /adb 配对 <host:port> <配对码>   指定完整地址配对
+  /adb 连接 [host:port]            连接设备（默认取设置项 adb_host:adb_port）
+  /adb 断开 [serial]               断开设备
+  /adb 切换                        把当前控制目标切换到 Android
+
+🎮 操作:
+  /adb 截图 [观察目标]             截图（带目标时调用视觉模型分析坐标）
+  /adb 点击 x y                    点击
+  /adb 长按 x y [毫秒]             长按
+  /adb 滑动 x1 y1 x2 y2 [毫秒]     滑动/拖拽
+  /adb 滑动 up|down|left|right     按方向滑动
+  /adb 输入 <文本>                 输入文本（中文需 ADBKeyboard）
+  /adb 按键 <key>                  单键：back/home/recents/enter/volume_up...
+  /adb 组合键 <k1> <k2>            组合键（Android 11+ 走 keycombination）
+  /adb 应用 <包名>                 启动应用
+  /adb 停止 <包名>                 强制停止应用
+  /adb 应用列表 [关键字]           列出第三方应用包名
+  /adb 命令 <shell 命令>           执行任意 adb shell 命令
+  /adb 安装 <apk 绝对路径>         安装 APK
+  /adb 状态                        查看 adb 路径、版本、设备与连接状态
+  /adb 帮助                        显示本帮助"""
 
 KEY_MAP = {
     "回车": "enter", "enter": "enter",
@@ -249,14 +324,14 @@ def _extract_coordinates_from_text(
 @register(
     "AstrbotFishEyes",
     "AstrBot Developer",
-    "AstrbotFishEyes 电脑屏幕与远程控制：查看与操作本地或远程屏幕，支持视觉坐标识别、二级WebUI、LLM工具集与指令",
-    "1.1.0",
+    "AstrbotFishEyes 电脑与 Android 屏幕控制：查看与操作本地/远程电脑与 Android(ADB) 设备，支持视觉坐标识别、二级WebUI、LLM工具集与指令",
+    PLUGIN_VERSION,
 )
 class AstrbotFishEyesPlugin(Star):
     def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
         super().__init__(context)
         self.config = config if config is not None else {}
-        self.controller = UnifiedController(self.config)
+        self.controller = DeviceController(self.config)
 
         # 注册 AstrBot 二级 WebUI (Plugin View) 后端 API 路由
         self._register_web_routes()
@@ -277,14 +352,22 @@ class AstrbotFishEyesPlugin(Star):
 
         prefixes = [PLUGIN_NAME, LEGACY_PLUGIN_NAME]
         routes = [
-            ("status", self._api_get_status, ["GET"], "获取当前屏幕控制器状态"),
+            ("status", self._api_get_status, ["GET"], "获取当前控制目标与屏幕控制器状态"),
             ("screenshot", self._api_get_screenshot, ["GET"], "获取屏幕最新截图"),
-            ("action", self._api_post_action, ["POST"], "执行键鼠操作"),
+            ("action", self._api_post_action, ["POST"], "执行键鼠/触控操作"),
             ("lock", self._api_post_lock, ["POST"], "切换紧急锁定开关"),
             ("config", self._api_handle_config, ["GET", "POST"], "获取或更新屏幕控制配置"),
             ("connect", self._api_post_connect, ["POST"], "连接被控目标"),
             ("disconnect", self._api_post_disconnect, ["POST"], "断开被控目标连接并释放资源"),
             ("logs", self._api_get_logs, ["GET"], "获取最近操作日志"),
+            # —— 1.1.0 新增：PC / Android 目标切换与 ADB 配对连接 ——
+            ("switch", self._api_post_switch, ["POST"], "切换 PC / Android 控制目标"),
+            ("adb_devices", self._api_get_adb_devices, ["GET"], "列出 ADB 设备"),
+            ("adb_pair", self._api_post_adb_pair, ["POST"], "ADB 无线调试配对"),
+            ("adb_connect", self._api_post_adb_connect, ["POST"], "ADB 连接设备并建立会话"),
+            ("adb_disconnect", self._api_post_adb_disconnect, ["POST"], "ADB 断开设备"),
+            ("adb_apps", self._api_get_adb_apps, ["GET"], "列出已安装应用"),
+            ("adb_diag", self._api_get_adb_diag, ["GET"], "诊断 adb 链路：往返基线 / PNG / 设备端 JPEG 耗时"),
         ]
 
         for prefix in prefixes:
@@ -297,8 +380,25 @@ class AstrbotFishEyesPlugin(Star):
     async def initialize(self):
         """插件初始化钩子（默认不自动连接，仅当 auto_connect 显式设为 True 时连接）"""
         auto_conn = bool(self.config.get("auto_connect", False))
+
+        # 启动即解析 adb（优先插件内置），并把实际路径自动写回配置，设置页无需手填
+        try:
+            ready = await self.controller.ensure_adb_ready()
+            if ready.get("ok"):
+                if ready.get("changed"):
+                    self._persist_config()
+                logger.info(
+                    f"[{PLUGIN_NAME}] adb 就绪: {ready.get('path')} "
+                    f"(来源: {ready.get('source')}, {ready.get('version')})"
+                )
+            else:
+                logger.warning(f"[{PLUGIN_NAME}] adb 未就绪: {ready.get('error')}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] adb 探测异常: {e}")
+
         logger.info(
-            f"[{PLUGIN_NAME}] 正在初始化屏幕控制插件 (模式: {self.controller.mode}, 启动自动连接: {auto_conn}, 无操作断连: {self.controller.idle_timeout}s)..."
+            f"[{PLUGIN_NAME}] 正在初始化屏幕控制插件 (模式: {self.controller.mode}, 启动自动连接: {auto_conn}, "
+            f"PC 无操作断连: {self.controller.pc.idle_timeout}s, Android 无操作断连: {self.controller.android.idle_timeout}s)..."
         )
         if auto_conn:
             try:
@@ -480,6 +580,7 @@ class AstrbotFishEyesPlugin(Star):
         width: int,
         height: int,
         target: str = "",
+        device_label: str = "电脑",
     ) -> str:
         """
         对截取的屏幕画面叠加坐标标尺网格，并调用图片转述模型/视觉模型提取画面内容与可点击元素坐标 (x, y)。
@@ -493,8 +594,15 @@ class AstrbotFishEyesPlugin(Star):
                 logger.warning(f"[{PLUGIN_NAME}] 绘制坐标网格失败，将使用原图识图: {e}")
                 analysis_img_path = raw_img_path
 
+        is_phone = "手机" in device_label
+        click_hint = (
+            "`android_tap` / `android_long_press` / `android_click_element`"
+            if is_phone else
+            "`screen_click` / `screen_double_click` / `screen_type`"
+        )
+
         system_prompt = (
-            "你是一个专业的电脑屏幕 GUI 视觉识别与坐标定位助手。\n"
+            f"你是一个专业的{device_label}屏幕 GUI 视觉识别与坐标定位助手。\n"
             f"当前屏幕真实像素分辨率为：宽度 {width} px，高度 {height} px（左上角为 (0, 0)，右下角为 ({width - 1}, {height - 1})）。\n"
             "图片上已绘制了辅助定位的红色网格线与黄字像素坐标标签 `x,y`（例如 `400,200` 代表横坐标 X=400, 纵坐标 Y=200）。\n"
             "请务必参考画面上的坐标网格刻度，输出真实像素坐标 (x, y)，严禁编造超出分辨率的坐标。"
@@ -503,16 +611,16 @@ class AstrbotFishEyesPlugin(Star):
         target_clean = (target or "").strip()
         if target_clean:
             user_prompt = (
-                f"请仔细观察这张电脑屏幕截图（分辨率 {width}x{height}），重点寻找目标元素：【{target_clean}】。\n"
+                f"请仔细观察这张{device_label}屏幕截图（分辨率 {width}x{height}），重点寻找目标元素：【{target_clean}】。\n"
                 "请严格按以下结构输出：\n"
-                "1. **当前屏幕概况**：简述当前打开的窗口/软件及主要内容；\n"
+                "1. **当前屏幕概况**：简述当前打开的界面/应用及主要内容；\n"
                 f"2. **目标元素【{target_clean}】定位**：说明该元素在画面中的位置特征，并参考网格刻度给出其中心点的精确像素坐标，格式必须包含：`TARGET_COORDS: (x, y)`；\n"
                 "3. **其他关键可交互元素坐标列表**：列出画面上其他主要按钮、输入框、图标或菜单的名称及其中心像素坐标 `(x, y)`。"
             )
         else:
             user_prompt = (
-                f"请仔细观察这张电脑屏幕截图（分辨率 {width}x{height}），为自动化操作 Agent 提供详尽的视觉与坐标转述：\n"
-                "1. **当前窗口与画面内容**：当前焦点窗口是什么？画面中显示了哪些核心文字、弹窗或状态？\n"
+                f"请仔细观察这张{device_label}屏幕截图（分辨率 {width}x{height}），为自动化操作 Agent 提供详尽的视觉与坐标转述：\n"
+                "1. **当前界面与画面内容**：当前前台应用是什么？画面中显示了哪些核心文字、弹窗或状态？\n"
                 "2. **可点击/可交互元素坐标清单**：请参考画面上的 `x,y` 坐标网格刻度，列出画面上所有关键按钮、输入框、标签页、图标或菜单项的名称，以及它们中心点的精确像素坐标 `(x, y)`（例如：`- [搜索输入框]: (640, 120)`）。"
             )
 
@@ -525,15 +633,16 @@ class AstrbotFishEyesPlugin(Star):
 
         if vision_text:
             return (
-                f"📸 屏幕截图成功 (分辨率: {width}x{height}，视觉识别模型: {source_label})\n"
+                f"📸 {device_label}屏幕截图成功 (分辨率: {width}x{height}，视觉识别模型: {source_label})\n"
                 f"--- 屏幕视觉识别与元素坐标分析 ---\n"
                 f"{vision_text}\n"
                 f"----------------------------------\n"
-                f"💡 提示：你可直接根据上述元素的 (x, y) 像素坐标调用 `screen_click` / `screen_double_click` / `screen_type`，或调用 `screen_click_element` 传入目标描述进行点击。"
+                f"💡 提示：你可直接根据上述元素的 (x, y) 像素坐标调用 {click_hint}，"
+                f"或调用 `screen_click_element` / `android_click_element` 传入目标描述进行点击。"
             )
         else:
             return (
-                f"📸 屏幕截图已捕获 (分辨率: {width}x{height})，但自动调用视觉/图片转述模型未返回描述 ({source_label})。\n"
+                f"📸 {device_label}屏幕截图已捕获 (分辨率: {width}x{height})，但自动调用视觉/图片转述模型未返回描述 ({source_label})。\n"
                 f"💡 请在 AstrBot【系统设置 -> 默认图片转述模型】或本插件设置【vision_provider_id】中配置一个支持多模态识图的模型（如 GPT-4o / Gemini / Qwen-VL / GLM-4V），即可自动识别画面元素与点击坐标。"
             )
 
@@ -542,6 +651,7 @@ class AstrbotFishEyesPlugin(Star):
         event: Optional[AstrMessageEvent],
         target: str,
         quality: int = 80,
+        device_label: str = "电脑",
     ) -> Tuple[Optional[Tuple[int, int]], str, Dict[str, Any]]:
         """
         截取最新屏幕并通过带坐标网格的视觉/图片转述模型定位指定 target 元素的中心像素坐标 (x, y)
@@ -556,7 +666,7 @@ class AstrbotFishEyesPlugin(Star):
             grid_img_path = _save_temp_screenshot(res["bytes"])
 
         system_prompt = (
-            "你是一个高精度的电脑 GUI 视觉元素坐标定位器。\n"
+            f"你是一个高精度的{device_label} GUI 视觉元素坐标定位器。\n"
             f"当前屏幕真实像素分辨率为：宽度 {w} px，高度 {h} px（X 范围 0~{w - 1}，Y 范围 0~{h - 1}）。\n"
             "截图中已绘制了红色网格线和黄字像素坐标标签 `x,y`（如 `400,200` 表示 X=400, Y=200）。\n"
             "请参考元素周边的 `x,y` 坐标网格刻度，计算出目标元素正中心的精确像素坐标。"
@@ -588,6 +698,10 @@ class AstrbotFishEyesPlugin(Star):
     # =========================================================================
     #  安全与权限鉴权机制
     # =========================================================================
+
+    def _device_label(self) -> str:
+        """当前控制目标的中文标签（用于视觉提示文案）"""
+        return "手机" if self.controller.target == TARGET_ANDROID else "电脑"
 
     def _is_event_admin(self, event: AstrMessageEvent) -> bool:
         """全面判定发送者是否为 AstrBot 管理员"""
@@ -656,6 +770,14 @@ class AstrbotFishEyesPlugin(Star):
         return {}
 
     async def _api_get_status(self, *args, **kwargs):
+        # 切到 Android 时顺手解析 adb 并把路径写回配置（只写一次）
+        if self.controller.target == TARGET_ANDROID:
+            try:
+                ready = await self.controller.ensure_adb_ready()
+                if ready.get("changed"):
+                    self._persist_config()
+            except Exception:
+                pass
         status = await self.controller.get_status(probe=False)
         return json_response(status)
 
@@ -747,6 +869,60 @@ class AstrbotFishEyesPlugin(Star):
                     amount=int(body.get("amount", 3)),
                     source=source,
                 )
+            # —— 1.1.0 新增：Android / 通用扩展动作 ——
+            elif action == "long_press":
+                res = await self.controller.long_press(
+                    x=body.get("x", 0),
+                    y=body.get("y", 0),
+                    duration_ms=int(body.get("duration_ms", 700)),
+                    source=source,
+                )
+            elif action == "swipe":
+                if body.get("direction") and not all(
+                    k in body for k in ("x1", "y1", "x2", "y2")
+                ):
+                    res = await self.controller.swipe_direction(
+                        direction=body.get("direction", "up"),
+                        amount=int(body.get("amount", 3)),
+                        source=source,
+                    )
+                else:
+                    res = await self.controller.swipe(
+                        x1=body.get("x1", 0),
+                        y1=body.get("y1", 0),
+                        x2=body.get("x2", 0),
+                        y2=body.get("y2", 0),
+                        duration_ms=int(body.get("duration_ms", 300)),
+                        source=source,
+                    )
+            elif action == "launch_app":
+                res = await self.controller.launch_app(
+                    package=body.get("package", ""),
+                    source=source,
+                )
+            elif action == "stop_app":
+                res = await self.controller.stop_app(
+                    package=body.get("package", ""),
+                    source=source,
+                )
+            elif action == "shell":
+                res = await self.controller.adb_shell(
+                    command=body.get("command", ""),
+                    source=source,
+                )
+            elif action == "install_apk":
+                res = await self.controller.install_apk(
+                    apk_path=body.get("path", ""),
+                    source=source,
+                )
+            elif action == "apps":
+                packages = await self.controller.list_packages(
+                    third_party=bool(body.get("third_party", True)),
+                    keyword=str(body.get("keyword", "") or ""),
+                )
+                res = {"status": "ok", "action": "apps", "packages": packages[:300], "total": len(packages)}
+            elif action == "current_app":
+                res = {"status": "ok", "action": "current_app", "detail": await self.controller.current_app()}
             else:
                 return error_response(f"未知操作类型: {action}")
 
@@ -806,6 +982,129 @@ class AstrbotFishEyesPlugin(Star):
         return json_response(self.controller.action_logs)
 
     # =========================================================================
+    #  1.1.0 新增：PC / Android 目标切换与 ADB 配对连接 API
+    # =========================================================================
+
+    async def _ensure_android_target(self) -> None:
+        """把当前控制目标切到 Android（切换时会断开旧目标，避免两套会话并存）"""
+        if self.controller.target != TARGET_ANDROID:
+            await self.controller.switch_target(TARGET_ANDROID, auto_connect=False)
+
+    async def _api_post_switch(self, *args, **kwargs):
+        """切换 PC / Android 控制目标（对应 WebUI 左上角切换按钮）"""
+        req = self._resolve_request(args)
+        try:
+            body = await self._read_req_json(req)
+            raw_target = body.get("target") or body.get("mode") or ""
+            auto_connect = bool(body.get("connect", True))
+            target = normalize_target(raw_target, default=self.controller.target)
+            status = await self.controller.switch_target(target, auto_connect=auto_connect)
+            if target == TARGET_ANDROID:
+                try:
+                    await self.controller.ensure_adb_ready()
+                except Exception:
+                    pass
+            # 记住目标选择，插件重启后仍停留在同一目标
+            self._persist_config()
+            return json_response(status)
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"切换控制目标失败: {e}", status_code=500)
+
+    async def _api_get_adb_devices(self, *args, **kwargs):
+        """列出 adb 设备（供右侧【配对与连接】面板展示）"""
+        try:
+            devices = await self.controller.adb_devices(refresh=True)
+            return json_response({
+                "devices": devices,
+                "android": self.controller.android.describe(),
+                "target": self.controller.target,
+            })
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"获取 ADB 设备列表失败: {e}", status_code=400)
+
+    async def _api_post_adb_pair(self, *args, **kwargs):
+        """ADB 无线调试配对：body = {host, port, code}"""
+        req = self._resolve_request(args)
+        try:
+            body = await self._read_req_json(req)
+            host = str(body.get("host") or self.config.get("adb_pair_host", "127.0.0.1"))
+            port = body.get("port") or self.config.get("adb_pair_port", 5555)
+            code = str(body.get("code") or "")
+            res = await self.controller.adb_pair(host=host, port=port, code=code)
+            res["android"] = self.controller.android.describe()
+            return json_response(res)
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"ADB 配对失败: {e}", status_code=500)
+
+    async def _api_post_adb_connect(self, *args, **kwargs):
+        """ADB 连接设备并立即建立插件会话：body = {host, port}"""
+        req = self._resolve_request(args)
+        try:
+            body = await self._read_req_json(req)
+            host = str(body.get("host") or self.config.get("adb_host", "127.0.0.1"))
+            port = body.get("port") or self.config.get("adb_port", 5555)
+            await self._ensure_android_target()
+            res = await self.controller.adb_connect(host=host, port=port)
+            status = None
+            if res.get("ok"):
+                status = await self.controller.connect(source="webui")
+            self._persist_config()
+            return json_response({
+                "ok": bool(res.get("ok")),
+                "message": res.get("message"),
+                "serial": res.get("serial"),
+                "state": res.get("state"),
+                "status": status,
+                "android": self.controller.android.describe(),
+            })
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"ADB 连接失败: {e}", status_code=500)
+
+    async def _api_post_adb_disconnect(self, *args, **kwargs):
+        """断开 ADB 设备并结束插件会话：body = {serial?}"""
+        req = self._resolve_request(args)
+        try:
+            body = await self._read_req_json(req)
+            serial = str(body.get("serial") or "")
+            res = await self.controller.adb_disconnect(serial=serial)
+            status = await self.controller.disconnect(
+                reason="管理员在 WebUI 断开 Android 设备", source="webui")
+            return json_response({
+                "ok": bool(res.get("ok")),
+                "message": res.get("message"),
+                "status": status,
+                "android": self.controller.android.describe(),
+            })
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"ADB 断开失败: {e}", status_code=500)
+
+    async def _api_get_adb_diag(self, *args, **kwargs):
+        """链路诊断：adb 固定往返 vs PNG/JPEG 传输量，判断瓶颈在 RTT 还是带宽"""
+        try:
+            if self.controller.target != TARGET_ANDROID:
+                await self._ensure_android_target()
+            data = await self.controller.adb_diagnostics()
+            return json_response(data)
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"诊断失败: {e}", status_code=500)
+
+    async def _api_get_adb_apps(self, *args, **kwargs):
+        """列出 Android 已安装应用（默认第三方应用）"""
+        req = self._resolve_request(args)
+        keyword = ""
+        try:
+            if req is not None:
+                query = getattr(req, "query", None)
+                if isinstance(query, dict):
+                    keyword = str(query.get("keyword", "") or "")
+                elif hasattr(req, "args") and hasattr(req.args, "get"):
+                    keyword = str(req.args.get("keyword", "") or "")
+            packages = await self.controller.list_packages(third_party=True, keyword=keyword)
+            return json_response({"packages": packages[:300], "total": len(packages)})
+        except Exception as e:  # noqa: BLE001
+            return error_response(f"获取应用列表失败: {e}", status_code=400)
+
+    # =========================================================================
     #  LLM Agent 工具集 (Computer Use Tools - 支持视觉网格识图与精准点击)
     # =========================================================================
 
@@ -828,7 +1127,8 @@ class AstrbotFishEyesPlugin(Star):
                 try:
                     await event.send(
                         event.chain_result([
-                            Comp.Plain(f"🖥️ 屏幕截图 ({res['width']}x{res['height']}):\n"),
+                            Comp.Plain(f"{'📱' if self._device_label() == '手机' else '🖥️'} "
+                                       f"{self._device_label()}屏幕截图 ({res['width']}x{res['height']}):\n"),
                             Comp.Image.fromFileSystem(img_path),
                         ])
                     )
@@ -843,6 +1143,7 @@ class AstrbotFishEyesPlugin(Star):
                 width=res["width"],
                 height=res["height"],
                 target=target,
+                device_label=self._device_label(),
             )
             return analysis_report
         except Exception as e:
@@ -1060,6 +1361,327 @@ class AstrbotFishEyesPlugin(Star):
             return f"❌ 获取状态失败: {e}"
 
     # =========================================================================
+    #  LLM Agent 工具集：Android (ADB) —— 1.1.0 新增
+    # =========================================================================
+
+    async def _ensure_android_target_quiet(self) -> None:
+        """LLM 工具内部使用：必要时切到 Android 目标（不自动连接，由具体操作触发）"""
+        if self.controller.target != TARGET_ANDROID:
+            await self.controller.switch_target(TARGET_ANDROID, auto_connect=False)
+
+    @filter.llm_tool(name="android_screenshot")
+    async def tool_android_screenshot(self, event: AstrMessageEvent, target: str = "", quality: int = 75):
+        """截取被控 Android 手机/平板屏幕，并自动调用视觉/图片转述模型识别界面内容与各元素的像素坐标 (x, y)。当你需要通过 ADB 观察手机界面、寻找按钮坐标或确认操作结果时调用（未连接会自动尝试连接一次）。
+
+        Args:
+            target(string): 可选，需要重点寻找的目标元素描述（例如 '微信图标'、'登录按钮'、'搜索框'），留空则全面分析整个界面
+            quality(number): 截图JPEG画质(10-100)，默认75
+        """
+        if err := self._authorize(event, "android_screenshot"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            res = await self.controller.take_screenshot(quality=quality, source="llm", include_bytes=True)
+            img_path = _save_temp_screenshot(res["bytes"])
+            if bool(self.config.get("send_screenshot_in_tool", True)):
+                try:
+                    await event.send(
+                        event.chain_result([
+                            Comp.Plain(
+                                f"📱 Android 截图 ({res['width']}x{res['height']}，设备 {res.get('device_width')}x{res.get('device_height')}):\n"
+                            ),
+                            Comp.Image.fromFileSystem(img_path),
+                        ])
+                    )
+                except Exception as send_err:  # noqa: BLE001
+                    logger.warning(f"[{PLUGIN_NAME}] Android 截图发送图片异常: {send_err}")
+            return await self._analyze_screenshot_for_bot(
+                event=event,
+                raw_img_path=img_path,
+                img_bytes=res["bytes"],
+                width=res["width"],
+                height=res["height"],
+                target=target,
+                device_label="手机",
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 截图失败: {e}"
+
+    @filter.llm_tool(name="android_click_element")
+    async def tool_android_click_element(self, event: AstrMessageEvent, target: str, action: str = "click"):
+        """通过视觉识别在 Android 屏幕上找到指定元素（图标、按钮、文字）并点击/长按它。当你不知道元素精确坐标时优先调用此工具。
+
+        Args:
+            target(string): 目标元素描述（例如 '微信图标'、'右上角更多按钮'、'登录'）
+            action(string): 'click' 单击(默认)、'long_press' 长按、'double_click' 双击
+        """
+        if err := self._authorize(event, "android_click_element"):
+            return err
+        await self._ensure_android_target_quiet()
+        target_clean = (target or "").strip()
+        if not target_clean:
+            return "❌ 请提供要点击的目标元素描述 (target)"
+        try:
+            coords, detail, _shot = await self._locate_target_coordinates(
+                event, target_clean, device_label="手机")
+            if coords is None:
+                return f"❌ 未能点击【{target_clean}】：{detail}"
+            x, y = coords
+            act = (action or "click").strip().lower()
+            if act in ("long_press", "long", "长按"):
+                await self.controller.long_press(x=x, y=y, duration_ms=700, source="llm")
+                act_label = "长按"
+            elif act in ("double", "double_click", "双击"):
+                await self.controller.double_click(x=x, y=y, source="llm")
+                act_label = "双击"
+            else:
+                await self.controller.click(x=x, y=y, button="left", clicks=1, source="llm")
+                act_label = "单击"
+            return f"✅ 已视觉定位【{target_clean}】于 ({x}, {y})，并执行【{act_label}】（{detail}）"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ 视觉定位点击【{target_clean}】失败: {e}"
+
+    @filter.llm_tool(name="android_tap")
+    async def tool_android_tap(self, event: AstrMessageEvent, x: int, y: int):
+        """点击 Android 屏幕指定像素坐标 (x, y)（坐标以截图分辨率为准，插件会自动换算到设备真实分辨率）。
+
+        Args:
+            x(number): 横坐标（截图坐标）
+            y(number): 纵坐标（截图坐标）
+        """
+        if err := self._authorize(event, "android_tap"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            res = await self.controller.click(x=x, y=y, button="left", clicks=1, source="llm")
+            return f"✅ 已点击 Android 屏幕 ({x}, {y})（设备坐标 {res.get('x')}, {res.get('y')}）"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 点击失败: {e}"
+
+    @filter.llm_tool(name="android_long_press")
+    async def tool_android_long_press(self, event: AstrMessageEvent, x: int, y: int, duration_ms: int = 700):
+        """在 Android 屏幕指定坐标长按（用于弹出菜单、进入编辑、拖拽前的长按选中）。
+
+        Args:
+            x(number): 横坐标
+            y(number): 纵坐标
+            duration_ms(number): 长按毫秒数，默认 700
+        """
+        if err := self._authorize(event, "android_long_press"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            await self.controller.long_press(x=x, y=y, duration_ms=duration_ms, source="llm")
+            return f"✅ 已在 Android 屏幕 ({x}, {y}) 长按 {duration_ms}ms"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 长按失败: {e}"
+
+    @filter.llm_tool(name="android_swipe")
+    async def tool_android_swipe(
+        self,
+        event: AstrMessageEvent,
+        x1: int = 0,
+        y1: int = 0,
+        x2: int = 0,
+        y2: int = 0,
+        duration_ms: int = 300,
+        direction: str = "",
+    ):
+        """在 Android 屏幕上滑动：可传起止坐标，也可只传 direction（up/down/left/right）做整屏翻页/切换。
+
+        Args:
+            x1(number): 起始横坐标（与 direction 二选一）
+            y1(number): 起始纵坐标
+            x2(number): 结束横坐标
+            y2(number): 结束纵坐标
+            duration_ms(number): 滑动时长毫秒，默认 300
+            direction(string): 方向滑动：up / down / left / right（传了方向则忽略坐标）
+        """
+        if err := self._authorize(event, "android_swipe"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            if direction:
+                await self.controller.swipe_direction(direction=direction, amount=3, source="llm")
+                return f"✅ 已在 Android 屏幕向【{direction}】滑动"
+            await self.controller.swipe(x1=x1, y1=y1, x2=x2, y2=y2, duration_ms=duration_ms, source="llm")
+            return f"✅ 已在 Android 屏幕从 ({x1}, {y1}) 滑动到 ({x2}, {y2})"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 滑动失败: {e}"
+
+    @filter.llm_tool(name="android_type")
+    async def tool_android_type(self, event: AstrMessageEvent, text: str):
+        """向 Android 当前焦点输入框输入文本（英文数字直接 input text，中文等需设备安装 ADBKeyboard，插件会自动尝试）。
+
+        Args:
+            text(string): 要输入的文本
+        """
+        if err := self._authorize(event, "android_type"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            res = await self.controller.type_text(text=text, source="llm")
+            return f"✏️ 已向 Android 输入 {res.get('length', len(text))} 个字符（方式: {res.get('method', 'unknown')}）"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 文本输入失败: {e}"
+
+    @filter.llm_tool(name="android_key")
+    async def tool_android_key(self, event: AstrMessageEvent, key: str):
+        """在 Android 上按下单个按键：back(返回) / home(主屏) / recents(多任务) / enter / volume_up / volume_down / power 等。
+
+        Args:
+            key(string): 键名（back/home/recents/enter/escape/volume_up/volume_down/power/up/down/left/right，或 KEYCODE_XXX）
+        """
+        if err := self._authorize(event, "android_key"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            res = await self.controller.press_key(key=key, source="llm")
+            return f"✅ 已在 Android 按下按键 {key}（keycode={res.get('keycode')}）"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 按键失败: {e}"
+
+    @filter.llm_tool(name="android_open_app")
+    async def tool_android_open_app(self, event: AstrMessageEvent, package: str):
+        """在 Android 上启动一个应用（传包名，例如 com.tencent.mm；也可传 Activity 组件名 a/b）。
+
+        Args:
+            package(string): 应用包名或 Activity 组件名
+        """
+        if err := self._authorize(event, "android_open_app"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            res = await self.controller.launch_app(package=package, source="llm")
+            comp = res.get("component") or res.get("package") or package
+            return f"✅ 已在 Android 启动: {comp}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ 启动应用失败: {e}"
+
+    @filter.llm_tool(name="android_stop_app")
+    async def tool_android_stop_app(self, event: AstrMessageEvent, package: str):
+        """强制停止 Android 上的应用（传包名）。
+
+        Args:
+            package(string): 应用包名
+        """
+        if err := self._authorize(event, "android_stop_app"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            await self.controller.stop_app(package=package, source="llm")
+            return f"✅ 已强制停止 Android 应用: {package}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ 停止应用失败: {e}"
+
+    @filter.llm_tool(name="android_shell")
+    async def tool_android_shell(self, event: AstrMessageEvent, command: str):
+        """在 Android 设备上执行任意 adb shell 命令并返回输出（如 `pm list packages -3`、`dumpsys battery`、`settings get system screen_brightness`、`wm size`）。
+
+        Args:
+            command(string): 要执行的 adb shell 命令
+        """
+        if err := self._authorize(event, "android_shell"):
+            return err
+        await self._ensure_android_target_quiet()
+        try:
+            res = await self.controller.adb_shell(command=command, source="llm")
+            out = (res.get("stdout") or "").strip()
+            err_out = (res.get("stderr") or "").strip()
+            body = out if out else (err_out or "(无输出)")
+            if len(body) > 3000:
+                body = body[:3000] + "\n…（输出已截断）"
+            return f"📱 $ adb shell {command}\n返回码: {res.get('code')}\n{body}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ adb shell 执行失败: {e}"
+
+    @filter.llm_tool(name="android_status")
+    async def tool_android_status(self, event: AstrMessageEvent):
+        """获取 Android 目标状态：adb 是否可用、adb 路径与版本、设备列表、当前连接设备型号与分辨率。"""
+        if err := self._authorize(event, "android_status"):
+            return err
+        try:
+            info = self.controller.android.describe()
+            connected = self.controller.android.connected
+            dev_lines = "\n".join(
+                f"  - {d.get('serial')}  [{d.get('state')}]  {d.get('model', '')}".rstrip()
+                for d in (info.get("devices") or [])
+            ) or "  （无）"
+            return (
+                f"📱 AstrbotFishEyes Android 状态\n"
+                f"控制目标: {self.controller.target}\n"
+                f"插件会话: {'✅ 已连接' if connected else '❌ 未连接'}\n"
+                f"ADB 可用: {'✅ 是' if info.get('adb_available') else '❌ 否'}\n"
+                f"ADB 来源: {ADB_SOURCE_LABELS.get(info.get('adb_source'), info.get('adb_source') or '-')}\n"
+                f"ADB 路径: {info.get('adb_path') or '(未找到)'}\n"
+                f"运行平台: {info.get('platform')}\n"
+                f"内置 adb: {'✅' if (info.get('bundled_adb') or {}).get('exists') else '❌'} "
+                f"{(info.get('bundled_adb') or {}).get('path') or '(无)'}\n"
+                f"Android 无操作断连: {info.get('idle_timeout')} 秒（0 = 永不断连）\n"
+                f"画面模式: {_stream_line(info)}\n"
+                f"设备端压缩: {_jpeg_line(info)}\n"
+                f"ADB 版本: {info.get('adb_version') or '-'}\n"
+                f"当前设备: {info.get('serial') or '-'}  {info.get('manufacturer', '')} {info.get('model', '')}  "
+                f"Android {info.get('android_version') or '-'}\n"
+                f"设备分辨率: {info.get('device_screen', {}).get('width')}x{info.get('device_screen', {}).get('height')}"
+                f"（截图 {info.get('capture_screen', {}).get('width')}x{info.get('capture_screen', {}).get('height')}）\n"
+                f"无线调试地址: {info.get('host')}:{info.get('port')}\n"
+                f"设备列表:\n{dev_lines}"
+                + (f"\n错误: {info.get('adb_error')}" if info.get("adb_error") else "")
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"❌ 获取 Android 状态失败: {e}"
+
+    @filter.llm_tool(name="android_pair")
+    async def tool_android_pair(self, event: AstrMessageEvent, code: str, host: str = "", port: str = ""):
+        """通过配对码配对 Android 无线调试设备（手机：开发者选项 → 无线调试 → 使用配对码配对设备，屏幕上会显示配对端口与 6 位配对码）。
+
+        Args:
+            code(string): 手机显示的配对码
+            host(string): 配对地址，默认取插件设置 adb_pair_host（127.0.0.1，配合 SSH 反向隧道时）
+            port(string): 配对端口（注意：配对端口与连接端口不是同一个）
+        """
+        if err := self._authorize(event, "android_pair"):
+            return err
+        try:
+            host = host or str(self.config.get("adb_pair_host", "127.0.0.1"))
+            port = port or str(self.config.get("adb_pair_port", 5555))
+            res = await self.controller.adb_pair(host=host, port=port, code=code)
+            return ("✅ " if res.get("ok") else "❌ ") + str(res.get("message"))
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 配对失败: {e}"
+
+    @filter.llm_tool(name="android_connect")
+    async def tool_android_connect(self, event: AstrMessageEvent, host: str = "", port: str = ""):
+        """连接 Android 设备并建立插件会话：执行 adb connect 并切换控制目标到 Android。未填地址时使用插件设置的 adb_host:adb_port（默认 127.0.0.1:5555，配合 SshAdbTunnel 反向隧道）。
+
+        Args:
+            host(string): 设备地址，例如 127.0.0.1 或 192.168.1.20
+            port(string): adb 连接端口，默认 5555
+        """
+        if err := self._authorize(event, "android_connect"):
+            return err
+        try:
+            host = host or str(self.config.get("adb_host", "127.0.0.1"))
+            port = port or str(self.config.get("adb_port", 5555))
+            await self._ensure_android_target_quiet()
+            res = await self.controller.adb_connect(host=host, port=port)
+            if not res.get("ok"):
+                return f"❌ {res.get('message')}"
+            status = await self.controller.connect(source="llm")
+            if status.get("connected"):
+                dev = status.get("device", {})
+                return (
+                    f"✅ 已连接 Android 设备 {status.get('serial')}\n"
+                    f"型号: {dev.get('manufacturer', '')} {dev.get('model', '')}\n"
+                    f"Android: {dev.get('android_version', '-')}\n"
+                    f"分辨率: {dev.get('device_screen', {}).get('width')}x{dev.get('device_screen', {}).get('height')}"
+                )
+            return f"❌ adb connect 成功但插件会话建立失败: {status.get('error')}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Android 连接失败: {e}"
+
+    # =========================================================================
     #  聊天交互命令 (/screen, /cu, /电脑控制, /屏幕)
     # =========================================================================
 
@@ -1089,36 +1711,85 @@ class AstrbotFishEyesPlugin(Star):
                 if status.get("connected") and status.get("idle_remaining") is not None
                 else f"\n无操作断连设置: {status.get('idle_timeout')} 秒"
             )
+            target = status.get("target", TARGET_PC)
+            target_line = (
+                f"控制目标: Android 手机 (ADB)"
+                if target == TARGET_ANDROID
+                else f"控制目标: PC 电脑 (mode={status.get('mode')})"
+            )
+            if target == TARGET_ANDROID:
+                android_info = status.get("android", {}) or {}
+                env_line = (
+                    f"\n设备: {android_info.get('manufacturer', '')} {android_info.get('model', '')} "
+                    f"(Android {android_info.get('android_version') or '-'})"
+                    f"\n序列号: {android_info.get('serial') or '-'}"
+                    f"\nADB: {'就绪' if android_info.get('adb_available') else '未找到'} "
+                    f"{android_info.get('adb_version') or ''}"
+                )
+            else:
+                env_line = f"\n系统环境: {status.get('platform')}"
             yield event.plain_result(
                 f"🖥️ AstrbotFishEyes 屏幕控制状态\n"
-                f"运行模式: {status.get('mode')}\n"
+                f"{target_line}\n"
                 f"连接状态: {'🟢 已连接' if status.get('connected') else '⚪ 未连接'}\n"
-                f"屏幕分辨率: {status.get('screen', {}).get('width')}x{status.get('screen', {}).get('height')}\n"
-                f"系统环境: {status.get('platform')}\n"
+                f"屏幕分辨率: {status.get('screen', {}).get('width')}x{status.get('screen', {}).get('height')}"
+                f"{env_line}\n"
                 f"锁定状态: {'🔒 已锁定' if status.get('is_locked') else '🔓 已解锁'}"
                 f"{idle_line}{err_line}"
             )
             return
 
-        # 模式切换
+        # 目标切换 (PC ↔ Android)
+        if sub_cmd in ["切换", "目标", "target", "device"]:
+            if err := self._authorize(event, "screen switch"):
+                yield event.plain_result(err)
+                return
+            if not args:
+                yield event.plain_result(
+                    f"当前控制目标: {self.controller.target}\n用法: /screen 切换 pc|android（安卓/手机 也可）"
+                )
+                return
+            new_target = normalize_target(args[0], default="")
+            if not new_target:
+                yield event.plain_result("❌ 目标可选值: pc（电脑）或 android（安卓手机）")
+                return
+            status = await self.controller.switch_target(new_target, auto_connect=True)
+            yield event.plain_result(
+                f"✅ 已切换控制目标为: {status.get('target_label') or new_target}\n"
+                f"连接状态: {'🟢 已连接' if status.get('connected') else '⚪ 未连接'}"
+                + (f"\n错误: {status.get('error')}" if status.get("error") else "")
+            )
+            return
+
+        # 模式切换（兼容旧用法 local/remote；也接受 pc/android 直接切目标）
         if sub_cmd in ["模式", "mode"]:
             if err := self._authorize(event, "screen mode"):
                 yield event.plain_result(err)
                 return
             if args:
                 new_mode = args[0].lower()
+                if new_mode in ["pc", "android", "安卓", "手机"]:
+                    new_target = normalize_target(new_mode, default=TARGET_PC)
+                    status = await self.controller.switch_target(new_target, auto_connect=True)
+                    yield event.plain_result(
+                        f"✅ 已切换控制目标为: {status.get('target_label') or new_target}"
+                        + (f"\n错误: {status.get('error')}" if status.get("error") else "")
+                    )
+                    return
                 if new_mode in ["local", "remote"]:
                     self.config["mode"] = new_mode
                     self._persist_config()
                     await self.controller.update_config_async(self.config)
-                    yield event.plain_result(f"✅ 已切换控制模式为: {new_mode}")
+                    yield event.plain_result(f"✅ 已切换 PC 控制模式为: {new_mode}")
                     return
-                else:
-                    yield event.plain_result("❌ 模式可选值: local 或 remote")
-                    return
-            else:
-                yield event.plain_result(f"当前模式: {self.controller.mode}")
+                yield event.plain_result("❌ 可选值: local / remote（PC 模式）或 pc / android（控制目标）")
                 return
+            yield event.plain_result(
+                f"当前控制目标: {self.controller.target}\n"
+                f"当前模式: {self.controller.mode}\n"
+                f"（切换目标: /screen 切换 pc|android；切换 PC 模式: /screen 模式 local|remote）"
+            )
+            return
 
         # 手动连接
         if sub_cmd in ["连接", "connect"]:
@@ -1166,7 +1837,8 @@ class AstrbotFishEyesPlugin(Star):
                 target_query = " ".join(args).strip()
 
                 yield event.chain_result([
-                    Comp.Plain(f"🖥️ 屏幕截图 ({res['width']}x{res['height']}):\n"),
+                    Comp.Plain(f"{'📱' if self._device_label() == '手机' else '🖥️'} "
+                               f"{self._device_label()}屏幕截图 ({res['width']}x{res['height']}):\n"),
                     Comp.Image.fromFileSystem(img_path),
                 ])
 
@@ -1178,6 +1850,7 @@ class AstrbotFishEyesPlugin(Star):
                         width=res["width"],
                         height=res["height"],
                         target=target_query,
+                        device_label=self._device_label(),
                     )
                     yield event.plain_result(analysis)
             except Exception as e:
@@ -1300,6 +1973,424 @@ class AstrbotFishEyesPlugin(Star):
 
         # 未知子指令
         yield event.plain_result(f"❓ 未知子指令: {sub_cmd}\n输入 /screen 帮助 查看用法")
+
+    # =========================================================================
+    #  Android (ADB) 聊天命令 (/adb, /安卓, /手机) —— 1.1.0 新增
+    # =========================================================================
+
+    @filter.command("adb", alias={"安卓", "手机", "手机控制"})
+    async def cmd_adb(self, event: AstrMessageEvent):
+        """Android (ADB) 控制聊天指令入口"""
+        text = event.message_str.strip()
+        parts = text.split()
+        if len(parts) <= 1:
+            yield event.plain_result(ADB_HELP_TEXT)
+            return
+
+        sub_cmd = parts[1].lower()
+        args = parts[2:]
+
+        if sub_cmd in ["帮助", "help", "?", "-h"]:
+            yield event.plain_result(ADB_HELP_TEXT)
+            return
+
+        # ---------------- 只读信息类（无需鉴权） ----------------
+        if sub_cmd in ["诊断", "diag", "diagnose"]:
+            yield event.plain_result("🩺 正在诊断 adb 链路（基线 + PNG + 设备端 JPEG，约 10~40 秒）...")
+            try:
+                if self.controller.target != TARGET_ANDROID:
+                    await self._ensure_android_target()
+                d = await self.controller.adb_diagnostics()
+                if d.get("error"):
+                    yield event.plain_result(f"❌ {d['error']}")
+                    return
+                png = d.get("png") or {}
+                jpeg = d.get("jpeg") or {}
+                png_line = (
+                    f"{png.get('ms')} ms / {png.get('bytes', 0) // 1024} KB"
+                    if png.get("ok") else f"失败（{str(png.get('error'))[:80]}）"
+                )
+                jpeg_line = (
+                    f"{jpeg.get('ms')} ms / {jpeg.get('bytes', 0) // 1024} KB "
+                    f"（{jpeg.get('variant')}/{jpeg.get('app_process')}）"
+                    if jpeg.get("ok") else f"未生效（{str(jpeg.get('error'))[:120]}）"
+                )
+                yield event.plain_result(
+                    f"🩺 Android 链路诊断\n"
+                    f"序列号: {d.get('serial')}\n"
+                    f"adb 固定往返(基线): {d.get('baseline_ms')} ms  {d.get('baseline_samples')}\n"
+                    f"链路速率(估): {d.get('link_kbps')} kbps\n"
+                    f"PNG 抓图: {png_line}\n"
+                    f"设备端 JPEG: {jpeg_line}\n"
+                    f"编码器: dex_ready={d.get('dex_ready')} variant={d.get('jpeg_variant')} "
+                    f"app_process={d.get('app_process')}\n"
+                    f"ffmpeg: {d.get('ffmpeg') or '未安装'}  {d.get('ffmpeg_version') or ''}\n"
+                    f"screenrecord: {d.get('screenrecord')}\n"
+                    f"视频流: running={(d.get('stream') or {}).get('running')} "
+                    f"frames={(d.get('stream') or {}).get('frames')} "
+                    f"原因={(d.get('stream') or {}).get('reason') or '-'}\n"
+                    f"流自检: screenrecord={((d.get('stream_probe') or {}).get('screenrecord_bytes'))}B "
+                    f"{(d.get('stream_probe') or {}).get('screenrecord_ms')}ms, "
+                    f"ffmpeg 解出 {((d.get('stream_probe') or {}).get('pipeline_frames'))} 帧 "
+                    f"{((d.get('stream_probe') or {}).get('pipeline_error') or '')}\n"
+                    f"结论: {d.get('advice')}"
+                )
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 诊断失败: {e}")
+            return
+
+        if sub_cmd in ["状态", "status"]:
+            try:
+                await self.controller.android.resolve_adb()
+            except Exception:
+                pass
+            info = self.controller.android.describe()
+            devices = info.get("devices") or []
+            dev_lines = "\n".join(
+                f"  - {d.get('serial')} [{d.get('state')}] {d.get('model', '')}".rstrip()
+                for d in devices
+            ) or "  （无）"
+            yield event.plain_result(
+                f"📱 AstrbotFishEyes Android 状态\n"
+                f"控制目标: {self.controller.target}\n"
+                f"插件会话: {'🟢 已连接' if self.controller.android.connected else '⚪ 未连接'}\n"
+                f"ADB 可用: {'✅' if info.get('adb_available') else '❌'} {info.get('adb_version') or ''}\n"
+                f"ADB 来源: {ADB_SOURCE_LABELS.get(info.get('adb_source'), info.get('adb_source') or '-')}\n"
+                f"ADB 路径: {info.get('adb_path') or '(未找到)'}\n"
+                f"运行平台: {info.get('platform')}\n"
+                f"内置 adb: {'✅' if (info.get('bundled_adb') or {}).get('exists') else '❌'} "
+                f"{(info.get('bundled_adb') or {}).get('path') or '(无)'}\n"
+                f"Android 无操作断连: {info.get('idle_timeout')} 秒（0 = 永不断连）\n"
+                f"画面模式: {_stream_line(info)}\n"
+                f"设备端压缩: {_jpeg_line(info)}\n"
+                f"当前设备: {info.get('serial') or '-'} {info.get('manufacturer', '')} "
+                f"{info.get('model', '')} Android {info.get('android_version') or '-'}\n"
+                f"分辨率: {info.get('device_screen', {}).get('width')}x{info.get('device_screen', {}).get('height')}"
+                f"（截图 {info.get('capture_screen', {}).get('width')}x{info.get('capture_screen', {}).get('height')}）\n"
+                f"无线调试地址: {info.get('host')}:{info.get('port')}\n"
+                f"设备列表:\n{dev_lines}"
+                + (f"\n提示: {info.get('adb_error')}" if info.get("adb_error") else "")
+            )
+            return
+
+        if sub_cmd in ["设备", "devices", "list"]:
+            try:
+                devices = await self.controller.adb_devices(refresh=True)
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 获取设备列表失败: {e}")
+                return
+            if not devices:
+                yield event.plain_result(
+                    "📱 当前没有 adb 设备。\n"
+                    "请确认：手机已开启「无线调试」，且 SshAdbTunnel 反向隧道已在服务器 127.0.0.1:5555 就绪，"
+                    "然后执行 /adb 连接。"
+                )
+                return
+            lines = "\n".join(
+                f"  {'🟢' if d.get('state') == 'device' else '⚪'} {d.get('serial')} "
+                f"[{d.get('state')}] {d.get('manufacturer', '')} {d.get('model', '')}".rstrip()
+                for d in devices
+            )
+            yield event.plain_result(f"📱 adb 设备列表:\n{lines}")
+            return
+
+        # ---------------- 以下为操作类，需要鉴权 ----------------
+        if err := self._authorize(event, f"adb {sub_cmd}"):
+            yield event.plain_result(err)
+            return
+
+        # 配对
+        if sub_cmd in ["配对", "pair"]:
+            if len(args) < 2:
+                yield event.plain_result(
+                    "用法: /adb 配对 <端口> <配对码>\n"
+                    "      /adb 配对 <host:port> <配对码>\n"
+                    "      /adb 配对 <host> <端口> <配对码>\n"
+                    "配对端口在手机「开发者选项 → 无线调试 → 使用配对码配对设备」弹窗中显示（与连接端口不同）。"
+                )
+                return
+            host = str(self.config.get("adb_pair_host", "127.0.0.1"))
+            port = self.config.get("adb_pair_port", 5555)
+            if len(args) >= 3:
+                host, port, code = args[0], args[1], args[2]
+            else:
+                first, code = args[0], args[1]
+                if ":" in first:
+                    host, port = self.controller.android._split_host_port(first, None)
+                elif first.isdigit():
+                    port = first
+                else:
+                    host = first
+            res = await self.controller.adb_pair(host=host, port=port, code=code)
+            msg = ("✅ " if res.get("ok") else "❌ ") + str(res.get("message"))
+            if res.get("ok"):
+                msg += "\n👉 配对成功后，在手机「无线调试」主页查看【连接端口】，再执行 /adb 连接 <端口>"
+            yield event.plain_result(msg)
+            return
+
+        # 连接
+        if sub_cmd in ["连接", "connect"]:
+            host = str(self.config.get("adb_host", "127.0.0.1"))
+            port = self.config.get("adb_port", 5555)
+            if args:
+                if ":" in args[0]:
+                    host, port = self.controller.android._split_host_port(args[0], None)
+                elif args[0].isdigit():
+                    port = args[0]
+                else:
+                    host = args[0]
+                    if len(args) > 1:
+                        port = args[1]
+            yield event.plain_result(f"🔄 正在连接 Android 设备 {host}:{port} ...")
+            try:
+                await self._ensure_android_target()
+                res = await self.controller.adb_connect(host=host, port=port)
+                if not res.get("ok"):
+                    yield event.plain_result(f"❌ {res.get('message')}")
+                    return
+                status = await self.controller.connect(source="chat")
+                if not status.get("connected"):
+                    yield event.plain_result(f"❌ adb connect 成功但会话建立失败: {status.get('error')}")
+                    return
+                dev = status.get("device", {}) or {}
+                yield event.plain_result(
+                    f"✅ Android 设备已连接\n"
+                    f"序列号: {status.get('serial')}\n"
+                    f"型号: {dev.get('manufacturer', '')} {dev.get('model', '')}\n"
+                    f"Android: {dev.get('android_version', '-')}\n"
+                    f"分辨率: {dev.get('device_screen', {}).get('width')}x{dev.get('device_screen', {}).get('height')}"
+                )
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 连接异常: {e}")
+            return
+
+        # 断开
+        if sub_cmd in ["断开", "断开连接", "disconnect"]:
+            try:
+                await self.controller.adb_disconnect(args[0] if args else "")
+                status = await self.controller.disconnect(reason="通过聊天命令断开 Android 设备", source="chat")
+                yield event.plain_result(
+                    f"🔌 已断开 Android 设备连接"
+                    + (f"\n状态: {status.get('error')}" if status.get("error") else "")
+                )
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 断开失败: {e}")
+            return
+
+        # 切换控制目标
+        if sub_cmd in ["切换", "target"]:
+            status = await self.controller.switch_target(TARGET_ANDROID, auto_connect=True)
+            yield event.plain_result(
+                f"✅ 控制目标已切换到 Android（{'已连接' if status.get('connected') else '未连接'}）"
+                + (f"\n错误: {status.get('error')}" if status.get("error") else "")
+            )
+            return
+
+        # 后续操作统一确保目标是 Android
+        await self._ensure_android_target()
+
+        # 截图
+        if sub_cmd in ["截图", "screenshot", "screen"]:
+            try:
+                res = await self.controller.take_screenshot(source=f"chat_{event.get_sender_id()}", include_bytes=True)
+                img_path = _save_temp_screenshot(res["bytes"])
+                yield event.chain_result([
+                    Comp.Plain(f"📱 Android 截图 ({res['width']}x{res['height']}，"
+                               f"设备 {res.get('device_width')}x{res.get('device_height')}):\n"),
+                    Comp.Image.fromFileSystem(img_path),
+                ])
+                target_query = " ".join(args).strip()
+                if target_query:
+                    yield event.plain_result(await self._analyze_screenshot_for_bot(
+                        event=event,
+                        raw_img_path=img_path,
+                        img_bytes=res["bytes"],
+                        width=res["width"],
+                        height=res["height"],
+                        target=target_query,
+                        device_label="手机",
+                    ))
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ Android 截图失败: {e}")
+            return
+
+        # 视觉识别点击
+        if sub_cmd in ["识别点击", "视觉点击", "find_click"]:
+            target_desc = " ".join(args).strip()
+            if not target_desc:
+                yield event.plain_result("用法: /adb 识别点击 <目标元素描述>")
+                return
+            yield event.plain_result(f"🔍 正在截取手机屏幕并视觉定位【{target_desc}】...")
+            try:
+                coords, detail, _shot = await self._locate_target_coordinates(
+                    event, target_desc, device_label="手机")
+                if coords is None:
+                    yield event.plain_result(f"❌ 未能定位【{target_desc}】：{detail}")
+                    return
+                x, y = coords
+                await self.controller.click(x=x, y=y, source="chat")
+                yield event.plain_result(f"✅ 已视觉定位【{target_desc}】于 ({x}, {y}) 并点击（{detail}）")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 视觉识别点击失败: {e}")
+            return
+
+        # 点击
+        if sub_cmd in ["点击", "tap", "click"]:
+            if len(args) < 2:
+                yield event.plain_result("用法: /adb 点击 <x> <y>")
+                return
+            try:
+                x, y = int(args[0]), int(args[1])
+                res = await self.controller.click(x=x, y=y, source="chat")
+                yield event.plain_result(f"✅ 已点击 Android 屏幕 ({x}, {y})（设备坐标 {res.get('x')}, {res.get('y')}）")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 点击失败: {e}")
+            return
+
+        # 长按
+        if sub_cmd in ["长按", "longpress", "long_press"]:
+            if len(args) < 2:
+                yield event.plain_result("用法: /adb 长按 <x> <y> [毫秒]")
+                return
+            try:
+                x, y = int(args[0]), int(args[1])
+                ms = int(args[2]) if len(args) > 2 and args[2].isdigit() else 700
+                await self.controller.long_press(x=x, y=y, duration_ms=ms, source="chat")
+                yield event.plain_result(f"✅ 已在 ({x}, {y}) 长按 {ms}ms")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 长按失败: {e}")
+            return
+
+        # 滑动
+        if sub_cmd in ["滑动", "swipe", "拖拽"]:
+            if not args:
+                yield event.plain_result("用法: /adb 滑动 <x1> <y1> <x2> <y2> [毫秒]\n      /adb 滑动 up|down|left|right")
+                return
+            try:
+                if args[0] in ["up", "down", "left", "right", "上", "下", "左", "右"]:
+                    await self.controller.swipe_direction(direction=args[0], source="chat")
+                    yield event.plain_result(f"✅ 已向【{args[0]}】滑动")
+                    return
+                if len(args) < 4:
+                    yield event.plain_result("用法: /adb 滑动 <x1> <y1> <x2> <y2> [毫秒]")
+                    return
+                x1, y1, x2, y2 = int(args[0]), int(args[1]), int(args[2]), int(args[3])
+                ms = int(args[4]) if len(args) > 4 and args[4].isdigit() else 300
+                await self.controller.swipe(x1=x1, y1=y1, x2=x2, y2=y2, duration_ms=ms, source="chat")
+                yield event.plain_result(f"✅ 已从 ({x1}, {y1}) 滑动到 ({x2}, {y2})，时长 {ms}ms")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 滑动失败: {e}")
+            return
+
+        # 输入文本
+        if sub_cmd in ["输入", "type"]:
+            content = text.split(maxsplit=2)
+            if len(content) < 3:
+                yield event.plain_result("用法: /adb 输入 <文本>\n中文输入需手机安装 ADBKeyboard 输入法。")
+                return
+            try:
+                res = await self.controller.type_text(text=content[2], source="chat")
+                yield event.plain_result(f"✅ 已输入 {res.get('length')} 个字符（方式: {res.get('method')}）")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 输入失败: {e}")
+            return
+
+        # 单键
+        if sub_cmd in ["按键", "key", "press"]:
+            if not args:
+                yield event.plain_result("用法: /adb 按键 <back|home|recents|enter|volume_up|volume_down|power>")
+                return
+            try:
+                res = await self.controller.press_key(key=args[0], source="chat")
+                yield event.plain_result(f"✅ 已按下 {args[0]}（keycode={res.get('keycode')}）")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 按键失败: {e}")
+            return
+
+        # 组合键
+        if sub_cmd in ["组合键", "hotkey"]:
+            if not args:
+                yield event.plain_result("用法: /adb 组合键 <k1> <k2> ...（如 ctrl c）")
+                return
+            try:
+                keys = _parse_keys_input(args)
+                res = await self.controller.hotkey(keys=keys, source="chat")
+                yield event.plain_result(f"⚡ 已执行组合键: {' + '.join(keys)}（{res.get('mode')}）")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 组合键失败: {e}")
+            return
+
+        # 启动应用
+        if sub_cmd in ["应用", "启动", "app", "launch"]:
+            if not args:
+                yield event.plain_result("用法: /adb 应用 <包名>\n示例: /adb 应用 com.tencent.mm")
+                return
+            try:
+                res = await self.controller.launch_app(package=args[0], source="chat")
+                yield event.plain_result(f"✅ 已启动 {res.get('component') or res.get('package') or args[0]}")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 启动应用失败: {e}")
+            return
+
+        # 停止应用
+        if sub_cmd in ["停止", "关闭应用", "stop"]:
+            if not args:
+                yield event.plain_result("用法: /adb 停止 <包名>")
+                return
+            try:
+                await self.controller.stop_app(package=args[0], source="chat")
+                yield event.plain_result(f"✅ 已强制停止 {args[0]}")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 停止应用失败: {e}")
+            return
+
+        # 应用列表
+        if sub_cmd in ["应用列表", "packages", "apps"]:
+            try:
+                keyword = " ".join(args).strip()
+                packages = await self.controller.list_packages(keyword=keyword)
+                if not packages:
+                    yield event.plain_result("📱 没有匹配的第三方应用")
+                    return
+                shown = packages[:60]
+                more = f"\n…共 {len(packages)} 个，仅显示前 {len(shown)} 个" if len(packages) > len(shown) else ""
+                yield event.plain_result("📱 已安装应用:\n" + "\n".join(f"  - {p}" for p in shown) + more)
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 获取应用列表失败: {e}")
+            return
+
+        # 任意 shell
+        if sub_cmd in ["命令", "shell", "cmd"]:
+            content = text.split(maxsplit=2)
+            if len(content) < 3:
+                yield event.plain_result("用法: /adb 命令 <shell 命令>\n示例: /adb 命令 dumpsys battery")
+                return
+            try:
+                res = await self.controller.adb_shell(command=content[2], source="chat")
+                out = (res.get("stdout") or "").strip() or (res.get("stderr") or "").strip() or "(无输出)"
+                if len(out) > 3000:
+                    out = out[:3000] + "\n…（输出已截断）"
+                yield event.plain_result(f"📱 $ adb shell {content[2]}\n返回码: {res.get('code')}\n{out}")
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ adb shell 执行失败: {e}")
+            return
+
+        # 安装 APK
+        if sub_cmd in ["安装", "install"]:
+            content = text.split(maxsplit=2)
+            if len(content) < 3:
+                yield event.plain_result("用法: /adb 安装 <服务器上的 APK 绝对路径>")
+                return
+            try:
+                res = await self.controller.install_apk(apk_path=content[2].strip(), source="chat")
+                yield event.plain_result(
+                    ("✅ " if res.get("status") == "ok" else "❌ ") + str(res.get("message"))
+                )
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result(f"❌ 安装失败: {e}")
+            return
+
+        yield event.plain_result(f"❓ 未知子指令: {sub_cmd}\n输入 /adb 帮助 查看用法")
 
 
 # 向下兼容旧类名导入
