@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="10"
+    android:versionName="1.1.11">
+
+    <!--
+        注意：这里刻意不声明 package="..." 属性。
+        - AGP 8.x 起 namespace 必须写在 build.gradle 的 android.namespace，manifest 里的 package 会直接报错。
+        - 直连 aapt2 构建脚本(build_universal_apk.sh / build_apk.ps1)会在构建时把 package 注入临时清单副本。
+    -->
+
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 长时间挂机所需 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            specialUse 而不是 dataSync：
+            Android 15 起 dataSync 类型的前台服务有累计 6 小时运行上限，到点会被系统强制停止，
+            长时间推流场景必须改用 specialUse。
+        -->
+        <service
+            android:name=".SshTunnelService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent SSH reverse tunnel carrying ADB traffic for screen mirroring and remote control of this device" />
+        </service>
+    </application>
+</manifest>
