@@ -8,8 +8,8 @@ android {
         applicationId "com.example.sshadbtunnel"
         minSdk 29
         targetSdk 34
-        versionCode 10
-        versionName "1.1.11"
+        versionCode 11
+        versionName "1.1.12"
     }
 
     // 说明：本工程没有任何 native 库(jniLibs/NDK)，原先的 splits.abi 只会产生无意义的

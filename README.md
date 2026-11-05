@@ -2,7 +2,7 @@
 
 [![AstrBot Version](https://img.shields.io/badge/AstrBot-%3E%3D3.5.0-blue.svg)](https://github.com/Soulter/AstrBot)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.11-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.12-brightgreen.svg)](CHANGELOG.md)
 
 **AstrbotFishEyes** 是专为 [AstrBot](https://github.com/Soulter/AstrBot) 打造的**电脑 + Android 双端屏幕查看与远程自动化控制（Computer Use）插件**。支持本地与远程双模式、正/反向 SSH 隧道内网穿透、**USB 直连或无线调试的 ADB 控制**、像素坐标网格视觉定位、二级 WebUI 实时交互控制台，以及独立的单文件被控端桌面程序。
 
@@ -275,6 +275,6 @@ AstrbotFishEyes/
 
 ## 📌 版本规则
 
-- 首次修改版本号为 **1.1.0**，之后每次改动在末尾累加 **0.0.1**（`1.1.9 → 1.1.10 → 1.1.11 …`）；
+- 首次修改版本号为 **1.1.0**，之后每次改动在末尾累加 **0.0.1**（`1.1.10 → 1.1.11 → 1.1.12 …`）；
 - 插件、`metadata.yaml`、APK（`versionName`/`versionCode`）**保持同一版本号**；
 - 历史记录见 [CHANGELOG.md](CHANGELOG.md)。
