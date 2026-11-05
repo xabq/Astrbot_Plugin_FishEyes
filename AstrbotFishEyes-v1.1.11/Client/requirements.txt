@@ -1,6 +1,0 @@
-pyautogui>=0.9.54
-pillow>=9.5.0
-pyperclip>=1.8.2
-paramiko>=2.11.0
-pystray>=0.19.4
-pyinstaller>=5.13.0
