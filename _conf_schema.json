@@ -1,0 +1,261 @@
+{
+  "target": {
+    "description": "当前控制目标：pc（电脑）或 android（安卓手机/平板）",
+    "type": "string",
+    "options": [
+      "pc",
+      "android"
+    ],
+    "hint": "对应 WebUI 左上角的 PC / Android 切换按钮；切换后聊天指令、LLM 工具与二级控制台都会作用于该目标",
+    "default": "pc"
+  },
+  "mode": {
+    "description": "PC 控制模式：local（控制 AstrBot 所在本机屏幕）或 remote（通过 Agent / SSH 控制远程电脑屏幕）",
+    "type": "string",
+    "options": [
+      "local",
+      "remote"
+    ],
+    "hint": "仅在控制目标为 pc 时生效",
+    "default": "local"
+  },
+  "auto_connect": {
+    "description": "启动时自动连接当前控制目标",
+    "type": "bool",
+    "hint": "插件启动时是否自动连接被控设备（默认关闭，按需或手动连接以节省资源）",
+    "default": false
+  },
+  "idle_timeout": {
+    "description": "PC 无操作自动断连时间 (秒)",
+    "type": "int",
+    "hint": "仅作用于 PC 目标：超过该时间 Bot 与管理员均未进行任何查看或控制操作时自动断开并释放内存（0 表示永不自动断连），默认 300 秒；Android 目标请用 adb_idle_timeout",
+    "default": 300
+  },
+  "vision_provider_id": {
+    "description": "视觉识别 / 图片转述模型提供商",
+    "type": "string",
+    "_special": "select_provider",
+    "hint": "用于分析屏幕截图内容并定位点击坐标的多模态模型；留空则自动调用 AstrBot 系统设置的【默认图片转述模型 (default_image_caption_provider_id)】，若仍为空则回退至当前对话模型",
+    "default": ""
+  },
+  "enable_coord_grid": {
+    "description": "启用截图坐标网格辅助定位",
+    "type": "bool",
+    "hint": "开启后，在发送给视觉/图片转述模型分析的图片上自动绘制像素坐标标尺与网格，大幅提升 Bot 识别按钮与点击坐标的精准度",
+    "default": true
+  },
+  "send_screenshot_in_tool": {
+    "description": "Bot 截图时同步发送画面到聊天窗口",
+    "type": "bool",
+    "hint": "开启后，当 Bot 调用 screen_screenshot / android_screenshot 工具观察屏幕时，会将原始截图同步发到当前聊天会话中方便管理员查看",
+    "default": true
+  },
+  "remote_host": {
+    "description": "远程 Agent 主机地址",
+    "type": "string",
+    "hint": "若不启用 SSH 隧道，直接填写远程电脑局域网/公网 IP 或域名；若启用反向或正向 SSH 隧道则填 127.0.0.1",
+    "default": "127.0.0.1"
+  },
+  "remote_port": {
+    "description": "远程 Agent 端口",
+    "type": "int",
+    "hint": "被控电脑上 Agent 监听的 HTTP 端口，默认 8765",
+    "default": 8765
+  },
+  "remote_token": {
+    "description": "远程 Agent 访问密钥 (Token)",
+    "type": "string",
+    "hint": "与被控电脑 Agent 启动时配置的 Token 保持一致，留空表示无密码",
+    "default": ""
+  },
+  "use_ssh_tunnel": {
+    "description": "是否启用正向 SSH 端口转发隧道",
+    "type": "bool",
+    "hint": "当 AstrBot 主动通过 SSH 连接被控电脑或跳板机时开启（若使用被控端自带的反向隧道则无需开启）",
+    "default": false
+  },
+  "ssh_host": {
+    "description": "SSH 服务器主机地址",
+    "type": "string",
+    "hint": "被控电脑或中转堡垒机的 IP/域名",
+    "default": ""
+  },
+  "ssh_port": {
+    "description": "SSH 端口",
+    "type": "int",
+    "hint": "SSH 端口，默认 22",
+    "default": 22
+  },
+  "ssh_username": {
+    "description": "SSH 用户名",
+    "type": "string",
+    "hint": "登录 SSH 的用户名",
+    "default": ""
+  },
+  "ssh_password": {
+    "description": "SSH 密码",
+    "type": "string",
+    "hint": "SSH 登录密码（与密钥二选一）",
+    "default": ""
+  },
+  "ssh_key_path": {
+    "description": "SSH 私钥文件路径",
+    "type": "string",
+    "hint": "本地私钥路径，例如 ~/.ssh/id_rsa",
+    "default": ""
+  },
+  "screenshot_quality": {
+    "description": "截图质量 (1-100)",
+    "type": "int",
+    "hint": "JPEG 压缩质量，数值越小传输越快但画质降低，默认 75",
+    "default": 75
+  },
+  "command_timeout": {
+    "description": "指令超时时间 (秒)",
+    "type": "int",
+    "hint": "单次指令或网络请求的超时时间",
+    "default": 30
+  },
+  "adb_path": {
+    "description": "ADB 可执行文件路径",
+    "type": "string",
+    "hint": "留空即可：插件已内置 platform-tools（platform-tools/windows/adb.exe、platform-tools/linux/adb），会自动优先使用；也可填自定义绝对路径或带参数命令行（如 C:\\platform-tools\\adb.exe 或 adb -P 5038）覆盖内置版本",
+    "default": ""
+  },
+  "adb_serial": {
+    "description": "Android 设备序列号 / host:port",
+    "type": "string",
+    "hint": "留空则自动选择：优先已就绪的 USB 设备，其次用 adb_host:adb_port 做无线连接；填写 127.0.0.1:5555 这类地址时会自动先 adb connect",
+    "default": ""
+  },
+  "adb_host": {
+    "description": "Android 无线调试 / 隧道连接地址",
+    "type": "string",
+    "hint": "配合 SshAdbTunnel 反向隧道时填 127.0.0.1；局域网直连填手机 IP",
+    "default": "127.0.0.1"
+  },
+  "adb_port": {
+    "description": "Android 无线调试连接端口",
+    "type": "int",
+    "hint": "手机「无线调试」主页显示的连接端口；使用 SshAdbTunnel 时与 App 中填写的服务器端口一致（默认 5555）",
+    "default": 5555
+  },
+  "adb_pair_host": {
+    "description": "Android 配对地址",
+    "type": "string",
+    "hint": "配对时使用的地址，配合反向隧道时为 127.0.0.1",
+    "default": "127.0.0.1"
+  },
+  "adb_pair_port": {
+    "description": "Android 配对端口",
+    "type": "int",
+    "hint": "手机「使用配对码配对设备」弹窗中的配对端口（与连接端口不同）；配合 SshAdbTunnel 时需让 App 监听该端口",
+    "default": 5555
+  },
+  "adb_text_mode": {
+    "description": "Android 文本输入方式",
+    "type": "string",
+    "options": [
+      "auto",
+      "ascii",
+      "adbkeyboard",
+      "clipboard"
+    ],
+    "hint": "auto：ASCII 走 input text，中文优先 ADBKeyboard 再退剪贴板；ascii：只支持英文数字；adbkeyboard：强制使用 ADBKeyboard 输入法；clipboard：剪贴板粘贴",
+    "default": "auto"
+  },
+  "adb_screenshot_max_width": {
+    "description": "Android 截图最大宽度 (px)",
+    "type": "int",
+    "hint": "截图会等比缩放到该宽度再转 JPEG，点击坐标会自动换算回设备真实分辨率；设为 0 表示保持原始分辨率（流量更大）",
+    "default": 720
+  },
+  "adb_shell_timeout": {
+    "description": "adb shell 命令超时 (秒)",
+    "type": "int",
+    "hint": "执行任意 adb shell 命令（Bot 工具 / WebUI 快捷命令）的超时时间",
+    "default": 60
+  },
+  "adb_idle_timeout": {
+    "description": "Android 无操作自动断连时间 (秒)",
+    "type": "int",
+    "hint": "仅作用于 Android 目标：超过该时间无任何操作则断开手机连接（0 = 永不断连，默认 0）。手机挂机场景建议保持 0",
+    "default": 0
+  },
+  "adb_stream_mode": {
+    "description": "低延迟画面模式（H.264 视频流）",
+    "type": "string",
+    "options": [
+      "auto",
+      "on",
+      "off"
+    ],
+    "hint": "auto：检测到 ffmpeg 且设备支持 screenrecord 时启用（推荐，延迟可从秒级降到 100~300ms）；off：始终用 screencap 截图（慢但零依赖）",
+    "default": "auto"
+  },
+  "adb_stream_size": {
+    "description": "视频流分辨率",
+    "type": "string",
+    "hint": "auto = 设备分辨率的一半（1080x2400 → 540x1200）；也可写 540x1200、720x1600 等，必须是偶数",
+    "default": "auto"
+  },
+  "adb_stream_bitrate": {
+    "description": "视频流码率 (bps)",
+    "type": "int",
+    "hint": "越高越清晰越占带宽。弱网/移动网络建议 1000000~2000000，局域网可用 4000000",
+    "default": 2000000
+  },
+  "adb_stream_max_fps": {
+    "description": "视频流最大帧率",
+    "type": "int",
+    "hint": "WebUI 轮询取最新帧，8~15 足够；调高会增加手机与隧道压力",
+    "default": 10
+  },
+  "adb_stream_quality": {
+    "description": "视频流 MJPEG 质量 (2-20)",
+    "type": "int",
+    "hint": "ffmpeg -q:v 的取值，数字越小越清晰、体积越大；默认 6",
+    "default": 6
+  },
+  "adb_ffmpeg_path": {
+    "description": "ffmpeg 路径（可选）",
+    "type": "string",
+    "hint": "留空自动查找 PATH 中的 ffmpeg，其次使用 pip 包 imageio-ffmpeg 自带的可执行文件",
+    "default": ""
+  },
+  "adb_jpeg_mode": {
+    "description": "设备端 JPEG 压缩（无需 ffmpeg）",
+    "type": "string",
+    "options": [
+      "auto",
+      "on",
+      "off"
+    ],
+    "hint": "auto：在手机上 screencap → 缩放 → JPEG 后再传回（PNG 0.5~2MB 降到 80~200KB，弱网首选）；off：只用服务器侧压缩；on：强制启用",
+    "default": "auto"
+  },
+  "adb_jpeg_quality": {
+    "description": "设备端 JPEG 质量 (10-100)",
+    "type": "int",
+    "hint": "数值越小体积越小、越省带宽；默认 70 在手机上观感已经很好",
+    "default": 70
+  },
+  "whitelist_enabled": {
+    "description": "是否启用白名单访问控制",
+    "type": "bool",
+    "hint": "启用后仅管理员和白名单用户可在聊天中调用指令与工具；关闭后仅管理员可用",
+    "default": true
+  },
+  "whitelist": {
+    "description": "允许使用屏幕控制的用户 ID 白名单",
+    "type": "list",
+    "hint": "管理员始终可用。填写平台用户 ID，留空表示仅管理员可用",
+    "default": []
+  },
+  "deny_message": {
+    "description": "权限不足时的提示文案",
+    "type": "string",
+    "hint": "可用占位符：{uid}=用户ID, {tool}=工具或命令",
+    "default": "❌ 权限不足：{tool} 仅限管理员或白名单用户使用。\n如需使用，请联系管理员在 WebUI 插件设置中把你的 ID 加入白名单。\n你的用户 ID: {uid}"
+  }
+}

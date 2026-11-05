@@ -1,0 +1,16 @@
+# ===== PC 屏幕 / 键鼠 =====
+aiohttp>=3.8.0
+asyncssh>=2.13.0
+pillow>=9.5.0
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+
+# ===== Android (ADB) 模式 =====
+# adb 已随插件打包（platform-tools/），不需要额外安装。
+# 中文输入建议在手机安装 ADBKeyboard（com.android.adbkeyboard/.AdbIME），插件会自动启用并广播文本。
+
+# ===== 低延迟画面（可选但强烈建议）=====
+# 提供静态 ffmpeg 可执行文件，用于把 adb screenrecord 的 H.264 流解码成 MJPEG 帧。
+# 装了这个，WebUI 画面延迟可从「每帧 3~6 秒」降到 100~300ms；未安装时自动回退到 screencap 截图模式。
+# 若系统已有 ffmpeg（apt install ffmpeg），这一项可以删掉。
+imageio-ffmpeg>=0.4.9
